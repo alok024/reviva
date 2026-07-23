@@ -1,0 +1,51 @@
+name: Deploy
+
+# Production deploy is GATED on tests: the deploy job only runs after CI (build + smoke)
+# passes. If CI fails, deploy is skipped and production keeps the last good version.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Verify before deploy
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy to production (Vercel)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deploy credentials
+        id: guard
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -n "$VERCEL_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No VERCEL_TOKEN secret set - skipping production deploy (production untouched). Add VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID to enable."
+          fi
+      - name: Checkout
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/checkout@v4
+      - name: Setup Node
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Vercel CLI
+        if: steps.guard.outputs.ready == 'true'
+        run: npm i -g vercel@latest
+      - name: Deploy (production)
+        if: steps.guard.outputs.ready == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+          vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"

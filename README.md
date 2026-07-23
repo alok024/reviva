@@ -1,5 +1,7 @@
 # Reviva
 
+[![CI](https://github.com/alok024/reviva/actions/workflows/ci.yml/badge.svg)](https://github.com/alok024/reviva/actions/workflows/ci.yml) [![Deploy](https://github.com/alok024/reviva/actions/workflows/deploy.yml/badge.svg)](https://github.com/alok024/reviva/actions/workflows/deploy.yml)
+
 Restore and colorize old photos. Reviva takes a faded, scratched, or black-and-white
 photo and runs it through three passes - face restore, upscale, and colorize - to bring
 the people you love back to life.
