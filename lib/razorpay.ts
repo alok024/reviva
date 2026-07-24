@@ -31,6 +31,10 @@ export async function createOrder(
   notes: Record<string, string>,
 ): Promise<CreatedOrder> {
   if (RAZORPAY_MOCK) {
+    // Fail closed in production: a live deploy must never silently hand out mock orders.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Razorpay is not configured: set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET');
+    }
     // Deterministic-ish mock id; no network. Signature check below understands mock orders.
     const id = 'order_mock_' + crypto.randomBytes(8).toString('hex');
     return { order_id: id, amount, currency, key: 'rzp_test_mock', mock: true };
@@ -66,7 +70,8 @@ export function verifyPaymentSignature(orderId: string, paymentId: string, signa
 // Verify a webhook: HMAC-SHA256 over the RAW request body with the webhook secret.
 // Register the webhook route with a raw-body parser BEFORE any JSON body parser.
 export function verifyWebhookSignature(rawBody: Buffer | string, signature: string): boolean {
-  if (RAZORPAY_MOCK || !WEBHOOK_SECRET) return true; // mock: trust local webhook simulator
+  if (RAZORPAY_MOCK) return true; // explicit keyless mock: trust local webhook simulator
+  if (!WEBHOOK_SECRET) return false; // keys configured but no webhook secret — fail closed, don't trust unsigned webhooks
   const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex');
   return hexEqual(expected, signature);
 }

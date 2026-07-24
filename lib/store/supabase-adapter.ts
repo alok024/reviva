@@ -1,0 +1,80 @@
+// Stubbed durable-store drop-in (Supabase/Upstash). NOT the local-dev default — getStore() in
+// ./index always returns the in-memory store; nothing here is imported by that path. This file
+// exists so a real backend can be wired later without touching the frozen Store contract.
+//
+// TODO: implement against Supabase (Postgres, for the ledger/orders/leads tables) and/or
+// Upstash (Redis, for hitRateLimit/addSpend). Every method below is unimplemented and fails
+// loudly instead of silently behaving like the in-memory store. Env is read lazily inside each
+// call, never at import time, so importing this module is always safe with zero config and no
+// SDK is imported here — add @supabase/supabase-js / @upstash/redis only when actually wiring it.
+
+import type { Store, Identity, PurchaseRecord } from './index';
+
+function notConfigured(method: string): never {
+  const hasEnv = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+  throw new Error(
+    `Supabase store adapter is a stub: ${method}() is not implemented ` +
+      (hasEnv ? '(env is set, but no client code exists yet). ' : '(SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are also unset). ') +
+      'Finish lib/store/supabase-adapter.ts before calling createSupabaseStore().',
+  );
+}
+
+class SupabaseStore implements Store {
+  resolveIdentity(_hint: { cookieId?: string; ip?: string }): Identity {
+    return notConfigured('resolveIdentity');
+  }
+
+  getCredits(_identityId: string): number {
+    return notConfigured('getCredits');
+  }
+
+  grantCredits(_identityId: string, _n: number): number {
+    return notConfigured('grantCredits');
+  }
+
+  consumeCredit(_identityId: string): boolean {
+    return notConfigured('consumeCredit');
+  }
+
+  getFreeUsed(_identityId: string): number {
+    return notConfigured('getFreeUsed');
+  }
+
+  incFreeUsed(_identityId: string): number {
+    return notConfigured('incFreeUsed');
+  }
+
+  putPendingOrder(_orderId: string, _intent: { planId: string; amount: number }): void {
+    notConfigured('putPendingOrder');
+  }
+
+  getPendingOrder(_orderId: string): { planId: string; amount: number } | null {
+    return notConfigured('getPendingOrder');
+  }
+
+  recordPurchase(_p: PurchaseRecord): boolean {
+    return notConfigured('recordPurchase');
+  }
+
+  hitRateLimit(_key: string, _limit: number, _windowMs: number): boolean {
+    return notConfigured('hitRateLimit');
+  }
+
+  addSpend(_units: number): number {
+    return notConfigured('addSpend');
+  }
+
+  getSpendToday(): number {
+    return notConfigured('getSpendToday');
+  }
+
+  recordLead(_identityId: string, _contact: { email?: string; whatsapp?: string }): void {
+    notConfigured('recordLead');
+  }
+}
+
+// Never called by getStore(). A future chunk wires this in explicitly once Supabase/Upstash
+// credentials and client code exist; constructing it is cheap and side-effect-free.
+export function createSupabaseStore(): Store {
+  return new SupabaseStore();
+}

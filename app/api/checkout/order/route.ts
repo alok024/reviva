@@ -17,6 +17,7 @@ export async function POST(req: Request) {
     const result = await createCheckoutOrder(planId);
     return Response.json(result);
   } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 400 });
+    console.error('checkout/order failed:', err);
+    return Response.json({ error: 'Unable to create order' }, { status: 400 });
   }
 }

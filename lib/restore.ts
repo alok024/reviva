@@ -1,4 +1,6 @@
 import { runModel, REPLICATE_MOCK } from './replicate';
+import { getImageStore } from './imagestore';
+import { sanitizeImage } from './imagesafe';
 
 export interface RestoreSteps {
   face?: boolean;
@@ -8,7 +10,7 @@ export interface RestoreSteps {
 
 export interface StepResult {
   name: string;
-  status: 'done' | 'skipped';
+  status: 'done' | 'skipped' | 'failed';
   note: string;
 }
 
@@ -18,16 +20,44 @@ export interface RestoreResult {
   mock: boolean;
 }
 
-// Real Replicate model ids. Production MUST pin a specific version hash (e.g. "owner/model:<hash>")
-// so a model update cannot silently change output quality or per-run cost.
+// Real Replicate models, pinned via env — never hardcode a version hash, we don't have any.
+// Each input key is per-model (from its own Replicate schema), not one shared guess: gfpgan
+// takes "img"; real-esrgan and ddcolor take "image".
 const MODELS = {
-  face: 'tencentarc/gfpgan', // face restoration
-  upscale: 'nightmareai/real-esrgan', // 4x upscale / denoise
-  colorize: 'piddnad/ddcolor', // black-and-white colorization
-};
+  face: {
+    label: 'Face restore',
+    owner: 'tencentarc',
+    name: 'gfpgan',
+    version: process.env.REPLICATE_GFPGAN_VERSION || '',
+    inputKey: 'img',
+  },
+  upscale: {
+    label: 'Upscale',
+    owner: 'nightmareai',
+    name: 'real-esrgan',
+    version: process.env.REPLICATE_REAL_ESRGAN_VERSION || '',
+    inputKey: 'image',
+  },
+  colorize: {
+    label: 'Colorize',
+    owner: 'piddnad',
+    name: 'ddcolor',
+    version: process.env.REPLICATE_DDCOLOR_VERSION || '',
+    inputKey: 'image',
+  },
+} as const;
 
-// The input key each model expects for the source image.
-const IMAGE_INPUT_KEY = 'img'; // gfpgan/real-esrgan use "img"; ddcolor uses "image" (mapped below)
+type StepKey = keyof typeof MODELS;
+const STEP_ORDER: StepKey[] = ['face', 'upscale', 'colorize'];
+
+// Splits a "data:<type>;base64,<payload>" URL into raw bytes + content type. The API route
+// already validates this shape before it reaches here.
+function parseDataUrl(dataUrl: string): { bytes: Buffer; contentType: string } {
+  const comma = dataUrl.indexOf(',');
+  const header = dataUrl.slice(5, comma); // strip the leading "data:"
+  const contentType = header.split(';')[0] || 'application/octet-stream';
+  return { bytes: Buffer.from(dataUrl.slice(comma + 1), 'base64'), contentType };
+}
 
 export async function restorePhoto({
   image,
@@ -36,29 +66,51 @@ export async function restorePhoto({
   image: string;
   steps: RestoreSteps;
 }): Promise<RestoreResult> {
-  const enabled: Array<{ name: string; model: string; key: string }> = [];
-  if (steps?.face) enabled.push({ name: 'Face restore', model: MODELS.face, key: IMAGE_INPUT_KEY });
-  if (steps?.upscale) enabled.push({ name: 'Upscale', model: MODELS.upscale, key: IMAGE_INPUT_KEY });
-  if (steps?.colorize) enabled.push({ name: 'Colorize', model: MODELS.colorize, key: 'image' });
+  const enabled = STEP_ORDER.filter((k) => steps?.[k]);
 
   if (REPLICATE_MOCK) {
     // Echo the original back as the "after" so the before/after UI shows something real.
     return {
       after: image,
-      steps: enabled.map((s) => ({ name: s.name, status: 'done', note: 'mock' })),
+      steps: enabled.map((k) => ({ name: MODELS[k].label, status: 'done', note: 'mock' })),
       mock: true,
     };
   }
 
-  // Real mode: chain steps — each step's output image feeds the next step's input.
-  let current = image;
+  // Real mode: sanitize the upload once before it ever leaves this server, then chain steps
+  // through the image store so only small URLs — never multi-MB base64 — move between calls.
+  const store = getImageStore();
+  const source = parseDataUrl(image);
+  const safeBytes = sanitizeImage(source.bytes, source.contentType);
+  let currentUrl = await store.get(await store.put(safeBytes, source.contentType));
+  if (!currentUrl) throw new Error('image store did not return a url for the uploaded photo');
+
   const results: StepResult[] = [];
-  for (const step of enabled) {
-    const out = await runModel(step.model, { [step.key]: current });
-    const next = out[0];
-    if (next) current = next;
-    results.push({ name: step.name, status: 'done', note: 'replicate' });
+  for (const key of enabled) {
+    const spec = MODELS[key];
+    const out = await runModel(
+      { owner: spec.owner, name: spec.name, version: spec.version },
+      { [spec.inputKey]: currentUrl },
+    );
+    const outputUrl = out[0];
+    if (!outputUrl) throw new Error(`${spec.label}: Replicate returned no output`);
+
+    // Replicate's own output URL expires in ~1h — pull it in and re-store it durably.
+    const fetched = await fetch(outputUrl);
+    if (!fetched.ok) throw new Error(`${spec.label}: failed to fetch model output (${fetched.status})`);
+    const contentType = fetched.headers.get('content-type') || 'image/png';
+    const bytes = Buffer.from(await fetched.arrayBuffer());
+    const stored = await store.get(await store.put(bytes, contentType));
+    if (!stored) throw new Error(`${spec.label}: image store did not return a url for its output`);
+
+    currentUrl = stored;
+    results.push({ name: spec.label, status: 'done', note: 'replicate' });
   }
 
-  return { after: current, steps: results, mock: false };
+  return { after: currentUrl, steps: results, mock: false };
 }
+
+// lib/jobs.ts owns the job table and background scheduling; re-exported here so callers only
+// ever need to import from '@/lib/restore'.
+export { startRestoreJob, getRestoreJob } from './jobs';
+export type { RestoreJob } from './jobs';

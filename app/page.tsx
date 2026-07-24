@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 type StepKey = 'face' | 'upscale' | 'colorize';
 
@@ -10,11 +10,45 @@ interface StepResult {
   note: string;
 }
 
-interface RestoreResponse {
+interface RestoreJobResult {
   after: string;
   steps: StepResult[];
   mock: boolean;
+}
+
+interface RestoreResponse {
+  mode?: 'job' | 'preview';
+  jobId?: string;
+  preview?: string;
+  resultId?: string;
+  steps?: StepResult[];
+  mock?: boolean;
   error?: string;
+  purchaseRequired?: boolean;
+}
+
+interface RestoreJobStatus {
+  status?: 'queued' | 'running' | 'succeeded' | 'failed';
+  result?: RestoreJobResult;
+  error?: string;
+}
+
+interface EntitlementResponse {
+  credits?: number;
+  freeUsed?: number;
+  freeLimit?: number;
+  error?: string;
+}
+
+interface UnlockResponse {
+  image?: string;
+  error?: string;
+}
+
+interface Entitlement {
+  credits: number;
+  freeUsed: number;
+  freeLimit: number;
 }
 
 interface Plan {
@@ -23,15 +57,32 @@ interface Plan {
   currency: string;
   label: string;
   kind: string;
+  credits: number;
 }
 
 // Static pricing mirror for the landing cards (server is the source of truth at checkout).
+// Amount/currency/label/credits must stay byte-for-byte in sync with lib/checkout.ts PLANS -
+// createCheckoutOrder charges plan.amount, so any drift here quotes a price the server won't honor.
 const PLANS: Plan[] = [
-  { id: 'pack20', amount: 499, currency: 'USD', label: '$4.99 - 20 photos', kind: 'one-time' },
-  { id: 'unlimited_month', amount: 900, currency: 'USD', label: '$9/mo - unlimited', kind: 'sub' },
+  {
+    id: 'single',
+    amount: 59900,
+    currency: 'INR',
+    label: 'One memorial photo - full restoration + human QA',
+    kind: 'one-time',
+    credits: 1,
+  },
+  {
+    id: 'album',
+    amount: 299900,
+    currency: 'INR',
+    label: 'Memorial album, up to 15 photos - full restoration + human QA',
+    kind: 'one-time',
+    credits: 15,
+  },
 ];
 
-// Self-contained before/after showcase drawn as inline SVG (no external assets).
+// Self-contained before/after showcase drawn as inline SVG (no external assets, no real photo).
 const BEFORE_SVG =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -43,8 +94,21 @@ const AFTER_SVG =
     `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#eaddc9"/><circle cx="200" cy="120" r="70" fill="#f0c9a6"/><circle cx="180" cy="110" r="8" fill="#3b2b22"/><circle cx="220" cy="110" r="8" fill="#3b2b22"/><path d="M175 145 q25 20 50 0" stroke="#a25b4b" stroke-width="5" fill="none"/><rect x="120" y="185" width="160" height="115" rx="20" fill="#e11d48"/><rect x="140" y="60" width="120" height="30" rx="12" fill="#6b4a2f"/></svg>`,
   );
 
-function centsToPrice(amount: number, currency: string) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount / 100);
+function priceLabel(amount: number, currency: string) {
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount / 100);
+}
+
+const JOB_POLL_MS = 1200;
+const JOB_POLL_MAX_ATTEMPTS = 150; // ~3 minutes
+
+async function pollRestoreJob(jobId: string): Promise<RestoreJobStatus> {
+  for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(`/api/restore/status?id=${encodeURIComponent(jobId)}`);
+    const job: RestoreJobStatus = await res.json();
+    if (job.status === 'succeeded' || job.status === 'failed') return job;
+    await new Promise((resolve) => setTimeout(resolve, JOB_POLL_MS));
+  }
+  throw new Error('Restore is taking longer than expected - please try again shortly.');
 }
 
 declare global {
@@ -62,10 +126,34 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [credits, setCredits] = useState(3);
+  const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
   const [steps, setSteps] = useState<Record<StepKey, boolean>>({ face: true, upscale: true, colorize: true });
   const [buyStatus, setBuyStatus] = useState<string | null>(null);
+  const [resultId, setResultId] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [email, setEmail] = useState('');
+  const [whatsapp, setWhatsapp] = useState('');
+  const [unlockBusy, setUnlockBusy] = useState(false);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Credits/free-preview balance is server state, never a client guess - this is the only
+  // place the number on screen comes from.
+  const refreshEntitlement = useCallback(async () => {
+    try {
+      const res = await fetch('/api/entitlement');
+      const data: EntitlementResponse = await res.json();
+      if (res.ok && typeof data.credits === 'number') {
+        setEntitlement({ credits: data.credits, freeUsed: data.freeUsed ?? 0, freeLimit: data.freeLimit ?? 0 });
+      }
+    } catch {
+      // Display-only lookup - a failed refresh just leaves the last known balance on screen.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshEntitlement();
+  }, [refreshEntitlement]);
 
   const readFile = useCallback((file: File) => {
     setError(null);
@@ -83,6 +171,9 @@ export default function Home() {
       setFileName(file.name);
       setAfter(null);
       setResultSteps(null);
+      setResultId(null);
+      setLocked(false);
+      setUnlockError(null);
     };
     reader.readAsDataURL(file);
   }, []);
@@ -108,14 +199,12 @@ export default function Home() {
       setError('Turn on at least one step.');
       return;
     }
-    if (credits <= 0) {
-      setError('You are out of free photos. Grab a pack below.');
-      return;
-    }
     setBusy(true);
     setError(null);
     setAfter(null);
     setResultSteps(null);
+    setResultId(null);
+    setLocked(false);
     try {
       const res = await fetch('/api/restore', {
         method: 'POST',
@@ -123,15 +212,69 @@ export default function Home() {
         body: JSON.stringify({ image, steps }),
       });
       const data: RestoreResponse = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Restore failed');
-      setAfter(data.after);
-      setResultSteps(data.steps);
-      setIsMock(data.mock);
-      setCredits((c) => Math.max(0, c - 1));
+      if (!res.ok) {
+        setError(
+          data.purchaseRequired
+            ? 'Your free previews are used up. Choose a plan below to keep restoring.'
+            : data.error || 'Restore failed',
+        );
+        return;
+      }
+
+      if (data.mode === 'job' && data.jobId) {
+        const job = await pollRestoreJob(data.jobId);
+        if (job.status !== 'succeeded' || !job.result) {
+          throw new Error(job.error || 'Restore failed');
+        }
+        setAfter(job.result.after);
+        setResultSteps(job.result.steps);
+        setIsMock(job.result.mock);
+        setLocked(false); // paid restore - already unlocked, nothing left to gate
+      } else if (data.mode === 'preview' && data.preview && data.resultId && data.steps) {
+        setAfter(data.preview);
+        setResultSteps(data.steps);
+        setIsMock(!!data.mock);
+        setResultId(data.resultId);
+        setLocked(true); // free preview - watermarked until an email/WhatsApp unlock
+      } else {
+        throw new Error('Unexpected response from the restore service');
+      }
+      await refreshEntitlement();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function unlock() {
+    if (!resultId) return;
+    const trimmedEmail = email.trim();
+    const trimmedWhatsapp = whatsapp.trim();
+    if (!trimmedEmail && !trimmedWhatsapp) {
+      setUnlockError('Enter an email or WhatsApp number to unlock the full-resolution photo.');
+      return;
+    }
+    setUnlockBusy(true);
+    setUnlockError(null);
+    try {
+      const res = await fetch('/api/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resultId,
+          email: trimmedEmail || undefined,
+          whatsapp: trimmedWhatsapp || undefined,
+        }),
+      });
+      const data: UnlockResponse = await res.json();
+      if (!res.ok || !data.image) throw new Error(data.error || 'Could not unlock the full photo');
+      setAfter(data.image);
+      setLocked(false);
+    } catch (err) {
+      setUnlockError((err as Error).message);
+    } finally {
+      setUnlockBusy(false);
     }
   }
 
@@ -166,8 +309,13 @@ export default function Home() {
         });
         const verify = await verifyRes.json();
         if (verify.ok) {
-          setCredits((c) => (planId === 'unlimited_month' ? 9999 : c + 20));
-          setBuyStatus('Unlocked! Credits added. Test mode - no real charge.');
+          await refreshEntitlement();
+          const n = verify.credited;
+          setBuyStatus(
+            resp.mock
+              ? `Unlocked ${n} restoration${n === 1 ? '' : 's'}. Test mode - no real charge.`
+              : `Payment confirmed - ${n} restoration${n === 1 ? '' : 's'} added to your account.`,
+          );
         } else {
           setBuyStatus('Payment could not be verified.');
         }
@@ -198,6 +346,17 @@ export default function Home() {
     }
   }
 
+  const freeLeft = entitlement ? Math.max(0, entitlement.freeLimit - entitlement.freeUsed) : null;
+  const entitlementLabel = !entitlement
+    ? 'Checking your balance...'
+    : entitlement.credits > 0
+      ? `${entitlement.credits} paid restoration${entitlement.credits === 1 ? '' : 's'} ready`
+      : (freeLeft ?? 0) > 0
+        ? `${freeLeft} free preview${freeLeft === 1 ? '' : 's'} left`
+        : 'Free previews used - see pricing below';
+  const entitlementClass =
+    entitlement && (entitlement.credits > 0 || (freeLeft ?? 0) > 0) ? 'badge ok' : 'badge warn';
+
   return (
     <main>
       <nav className="nav">
@@ -212,22 +371,34 @@ export default function Home() {
 
       <div className="container">
         <section className="hero">
-          <span className="eyebrow">Photo restoration</span>
+          <span className="eyebrow">Memorial & legacy photo restoration</span>
           <h1>
-            Bring your old photos <span className="gradient-text">back to life</span>
+            Bring back the photo <span className="gradient-text">of the one you miss</span>
           </h1>
           <p className="lead">
-            Faded, scratched, or black-and-white - Reviva restores faces, sharpens detail, and adds natural color so the
-            people you love look the way you remember them.
+            Reviva restores faded, torn, and black-and-white photographs of the people who have
+            passed - repairing faces, sharpening detail, and adding natural color so heirloom
+            photos and family albums look the way you remember them.
           </p>
           <div className="row" style={{ justifyContent: 'center', maxWidth: 420, margin: '0 auto' }}>
             <a className="btn lg" href="#tool">
-              Restore your photo free
+              Restore a photo free
             </a>
           </div>
           <p className="muted" style={{ marginTop: 14, fontSize: '0.9rem' }}>
-            3 free photos - no sign-up needed
+            Free watermarked preview - unlock the full-resolution photo with just an email or WhatsApp number.
           </p>
+        </section>
+
+        <section className="section">
+          <div className="card center">
+            <span className="badge ok">Our guarantee</span>
+            <h2 style={{ marginTop: 14 }}>A real person checks every face before delivery</h2>
+            <p className="lead" style={{ margin: '12px auto 0' }}>
+              Every restoration is reviewed by a human against the original photo. If the likeness
+              is not right, we will redo it for free or refund you in full.
+            </p>
+          </div>
         </section>
 
         <section className="section">
@@ -237,7 +408,7 @@ export default function Home() {
                 <span className="badge">Before</span>
                 <img
                   src={BEFORE_SVG}
-                  alt="Faded black and white photo before restoration"
+                  alt="A faded, damaged heirloom photo before restoration"
                   style={{ width: '100%', borderRadius: 12, marginTop: 10, display: 'block' }}
                 />
               </div>
@@ -245,7 +416,7 @@ export default function Home() {
                 <span className="badge ok">After</span>
                 <img
                   src={AFTER_SVG}
-                  alt="Restored and colorized photo after Reviva"
+                  alt="The same photo restored and colorized by Reviva"
                   style={{ width: '100%', borderRadius: 12, marginTop: 10, display: 'block' }}
                 />
               </div>
@@ -256,12 +427,12 @@ export default function Home() {
         <section className="section center">
           <h2>How it works</h2>
           <p className="lead" style={{ margin: '0 auto 32px' }}>
-            Three passes, one click. Every step is optional.
+            Three passes, one click, then a human check before it reaches you.
           </p>
           <div className="grid cols-3">
             <div className="card">
               <div className="badge">Step 1</div>
-              <h3 style={{ marginTop: 12 }}>Restore faces</h3>
+              <h3 style={{ marginTop: 12 }}>Restore the face</h3>
               <p className="muted">Rebuilds blurred and damaged faces so expressions and detail come back sharp.</p>
             </div>
             <div className="card">
@@ -281,9 +452,7 @@ export default function Home() {
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
               <h2 style={{ margin: 0 }}>Restore a photo</h2>
-              <span className={credits > 0 ? 'badge ok' : 'badge warn'}>
-                {credits >= 9999 ? 'Unlimited' : `${credits} free photos left`}
-              </span>
+              <span className={entitlementClass}>{entitlementLabel}</span>
             </div>
 
             <div
@@ -379,9 +548,48 @@ export default function Home() {
                         alt="Restored"
                         style={{ width: '100%', borderRadius: 12, marginTop: 10, display: 'block' }}
                       />
-                      <a className="btn secondary" href={after} download={`reviva-${fileName || 'restored.png'}`} style={{ marginTop: 12 }}>
-                        Download result
-                      </a>
+                      {locked && resultId ? (
+                        <div style={{ marginTop: 14 }}>
+                          <p className="muted" style={{ fontSize: '0.85rem', marginBottom: 10 }}>
+                            This is a watermarked preview. Enter an email or WhatsApp number and
+                            we will unlock the full-resolution photo, free.
+                          </p>
+                          <div className="field">
+                            <label htmlFor="unlock-email">Email</label>
+                            <input
+                              id="unlock-email"
+                              type="email"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                              placeholder="you@example.com"
+                            />
+                          </div>
+                          <div className="field">
+                            <label htmlFor="unlock-whatsapp">or WhatsApp number</label>
+                            <input
+                              id="unlock-whatsapp"
+                              type="text"
+                              value={whatsapp}
+                              onChange={(e) => setWhatsapp(e.target.value)}
+                              placeholder="+91 98765 43210"
+                            />
+                          </div>
+                          {unlockError && <p style={{ color: 'var(--err)', marginBottom: 10 }}>{unlockError}</p>}
+                          <button className="btn" onClick={unlock} disabled={unlockBusy}>
+                            {unlockBusy ? <span className="spinner" /> : null}
+                            {unlockBusy ? 'Unlocking...' : 'Unlock full-resolution photo'}
+                          </button>
+                        </div>
+                      ) : (
+                        <a
+                          className="btn secondary"
+                          href={after}
+                          download={`reviva-${fileName || 'restored.png'}`}
+                          style={{ marginTop: 12 }}
+                        >
+                          Download result
+                        </a>
+                      )}
                     </>
                   ) : (
                     <p className="muted" style={{ marginTop: 10 }}>
@@ -415,37 +623,31 @@ export default function Home() {
 
         <section className="section" id="pricing">
           <div className="center">
-            <h2>Simple pricing</h2>
-            <p className="lead" style={{ margin: '0 auto 32px' }}>
-              Start with 3 free photos. Buy a pack when you have a whole album to bring back.
+            <h2>Per-project pricing</h2>
+            <p className="lead" style={{ margin: '0 auto 12px' }}>
+              Free previews are unlocked with just an email or WhatsApp number. Need more
+              restorations, or a whole album at once? Pay once - there is no subscription.
+            </p>
+            <p className="muted" style={{ margin: '0 auto 32px', fontSize: '0.85rem' }}>
+              Prices below are for customers in India. Outside India, checkout is handled by our
+              Merchant of Record and billed in your local currency.
             </p>
           </div>
           <div className="grid cols-2">
             {PLANS.map((plan) => (
               <div className="card" key={plan.id}>
-                <div className="badge">{plan.kind === 'sub' ? 'Subscription' : 'One-time'}</div>
+                <div className="badge">One-time</div>
                 <div className="price" style={{ marginTop: 12 }}>
-                  <span className="amt">{centsToPrice(plan.amount, plan.currency)}</span>
-                  <span className="muted">{plan.kind === 'sub' ? '/mo' : ''}</span>
+                  <span className="amt">{priceLabel(plan.amount, plan.currency)}</span>
                 </div>
                 <p className="muted" style={{ marginTop: 4 }}>{plan.label}</p>
                 <ul className="pill-list">
-                  {plan.id === 'pack20' ? (
-                    <>
-                      <li>20 full-quality restorations</li>
-                      <li>Face restore, upscale, and colorize</li>
-                      <li>Download in original resolution</li>
-                    </>
-                  ) : (
-                    <>
-                      <li>Unlimited restorations every month</li>
-                      <li>Priority processing</li>
-                      <li>Cancel anytime</li>
-                    </>
-                  )}
+                  <li>{plan.credits === 1 ? '1 photo, full restoration' : `Up to ${plan.credits} photos, full restoration`}</li>
+                  <li>Face restore, upscale, and colorize</li>
+                  <li>Human QA before delivery</li>
                 </ul>
                 <button className="btn" onClick={() => purchase(plan.id)} style={{ width: '100%' }}>
-                  {plan.id === 'pack20' ? 'Buy 20-photo pack' : 'Go unlimited'}
+                  {plan.id === 'single' ? 'Restore one photo' : 'Restore an album'}
                 </button>
               </div>
             ))}
@@ -456,13 +658,15 @@ export default function Home() {
             </p>
           )}
           <p className="center muted" style={{ marginTop: 10, fontSize: '0.85rem' }}>
-            Test mode - no real charge is made locally.
+            Test mode locally - no real charge is made without live Razorpay keys.
           </p>
         </section>
       </div>
 
       <footer className="footer">
-        <div className="container">Reviva - restore and colorize old photos. Your memories, brought back.</div>
+        <div className="container">
+          Reviva - memorial and legacy photo restoration, checked by a person before it reaches you.
+        </div>
       </footer>
     </main>
   );

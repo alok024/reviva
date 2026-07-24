@@ -20,11 +20,20 @@ export interface RunOptions {
   mockOutput?: string | string[]; // override the placeholder in mock mode
 }
 
-// Run a model version with input, poll to completion, return the output (usually image URL(s)).
-// `versionOrModel` accepts a pinned version hash (e.g. "stability-ai/sdxl:<hash>") — pin versions
-// in production so a model update can't silently change output/cost.
+// A model plus the version pinned for it. `version` comes from a REPLICATE_*_VERSION env var
+// (see lib/restore.ts) — never hardcode a hash here, we don't have any.
+export interface ReplicateModelRef {
+  owner: string;
+  name: string;
+  version: string;
+}
+
+// Run a prediction on a model's own endpoint and poll to completion, returning the output
+// (usually image URL(s)). Uses the model-scoped endpoint (/v1/models/{owner}/{name}/predictions)
+// rather than the generic /v1/predictions one — the generic endpoint requires a full version
+// id and 422s if handed a bare "owner/model" slug as `version`, which this used to send.
 export async function runModel(
-  versionOrModel: string,
+  model: ReplicateModelRef,
   input: Record<string, unknown>,
   opts: RunOptions = {},
 ): Promise<string[]> {
@@ -33,15 +42,18 @@ export async function runModel(
     return Array.isArray(out) ? out : [out];
   }
 
-  const version = versionOrModel.includes(':') ? versionOrModel.split(':')[1] : versionOrModel;
-  const create = await fetch('https://api.replicate.com/v1/predictions', {
+  if (!model.version) {
+    throw new Error(`no pinned version for ${model.owner}/${model.name} — set its REPLICATE_*_VERSION env var`);
+  }
+
+  const create = await fetch(`https://api.replicate.com/v1/models/${model.owner}/${model.name}/predictions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
       'Content-Type': 'application/json',
       Prefer: 'wait', // ask Replicate to hold the connection briefly for fast models
     },
-    body: JSON.stringify({ version, input }),
+    body: JSON.stringify({ version: model.version, input }),
   });
   if (!create.ok) {
     const body = await create.text().catch(() => '');
