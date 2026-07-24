@@ -71,6 +71,14 @@ class SupabaseStore implements Store {
   recordLead(_identityId: string, _contact: { email?: string; whatsapp?: string }): void {
     notConfigured('recordLead');
   }
+
+  recordResultOwner(_resultId: string, _identityId: string): void {
+    notConfigured('recordResultOwner');
+  }
+
+  ownsResult(_resultId: string, _identityId: string): boolean {
+    return notConfigured('ownsResult');
+  }
 }
 
 // Never called by getStore(). A future chunk wires this in explicitly once Supabase/Upstash

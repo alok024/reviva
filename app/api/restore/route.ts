@@ -118,6 +118,7 @@ export async function POST(req: Request) {
     }
 
     const resultId = await getImageStore().put(result.after, guessContentType(result.after));
+    store.recordResultOwner(resultId, identityId);
     const preview = watermarkPreview(result.after);
     const newFreeUsed = store.incFreeUsed(identityId);
 

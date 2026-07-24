@@ -2,6 +2,8 @@
 // the source photo and each intermediate result so only a small URL/key — never a multi-MB
 // base64 blob — has to move between restore steps and out to Replicate.
 
+import crypto from 'crypto';
+
 export interface ImageStore {
   put(bytes: Buffer | string, contentType: string): Promise<string>; // returns a durable URL/key
   get(key: string): Promise<string | null>;
@@ -26,11 +28,11 @@ function toBuffer(bytes: Buffer | string): Buffer {
 // other ImageStore) via getImageStore() once real object storage credentials exist.
 class InMemoryImageStore implements ImageStore {
   private files = new Map<string, StoredImage>();
-  private seq = 0;
 
   async put(bytes: Buffer | string, contentType: string): Promise<string> {
-    this.seq += 1;
-    const key = `mem://${Date.now().toString(36)}-${this.seq}`;
+    // Unguessable, non-sequential key — a sequential/time-derived key would let a caller
+    // enumerate other users' stored images.
+    const key = `mem://${crypto.randomUUID()}`;
     this.files.set(key, { data: toBuffer(bytes), contentType });
     return key;
   }

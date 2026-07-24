@@ -36,6 +36,8 @@ export interface Store {
   addSpend(units: number): number;
   getSpendToday(): number;
   recordLead(identityId: string, contact: { email?: string; whatsapp?: string }): void;
+  recordResultOwner(resultId: string, identityId: string): void;
+  ownsResult(resultId: string, identityId: string): boolean;
 }
 
 interface RateBucket {
@@ -60,6 +62,7 @@ class MemoryStore implements Store {
   private purchases = new Set<string>();
   private rateBuckets = new Map<string, RateBucket>();
   private leads: Lead[] = [];
+  private resultOwners = new Map<string, string>();
   private spendDay = '';
   private spendTotal = 0;
 
@@ -146,6 +149,15 @@ class MemoryStore implements Store {
 
   recordLead(identityId: string, contact: { email?: string; whatsapp?: string }): void {
     this.leads.push({ identityId, ...contact, createdAt: Date.now() });
+  }
+
+  recordResultOwner(resultId: string, identityId: string): void {
+    if (this.resultOwners.has(resultId)) return; // first record wins; ownership is immutable once set
+    this.resultOwners.set(resultId, identityId);
+  }
+
+  ownsResult(resultId: string, identityId: string): boolean {
+    return this.resultOwners.get(resultId) === identityId;
   }
 }
 

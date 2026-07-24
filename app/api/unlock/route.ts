@@ -19,6 +19,12 @@ export async function POST(req: Request) {
       return Response.json({ error: 'resultId is required' }, { status: 400, headers });
     }
 
+    // Ownership is server-authoritative and checked before any image access, so a non-owner
+    // gets the same 403 whether or not resultId exists (no existence oracle).
+    if (!getStore().ownsResult(resultId, identity.id)) {
+      return Response.json({ error: 'forbidden' }, { status: 403, headers });
+    }
+
     const email = typeof body.email === 'string' ? body.email : undefined;
     const whatsapp = typeof body.whatsapp === 'string' ? body.whatsapp : undefined;
     if (!email && !whatsapp) {

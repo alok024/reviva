@@ -3,6 +3,9 @@ import { PLANS, createCheckoutOrder, confirmPurchase, finalizePurchase } from '.
 import { getStore } from '../lib/store';
 import type { PurchaseRecord } from '../lib/store';
 import { RAZORPAY_MOCK, verifyWebhookSignature } from '../lib/razorpay';
+import { getImageStore } from '../lib/imagestore';
+import { POST as restorePOST } from '../app/api/restore/route';
+import { POST as unlockPOST } from '../app/api/unlock/route';
 
 // 1x1 PNG data URL used as the source photo.
 const TINY_PNG =
@@ -98,6 +101,50 @@ async function main() {
   // razorpay: keyless mode is explicit mock, webhook verification is permissive only there
   assert(RAZORPAY_MOCK === true, 'RAZORPAY_MOCK should be true with no keys present');
   assert(verifyWebhookSignature('{}', 'not-a-real-signature') === true, 'webhook signature should verify in explicit keyless mock');
+
+  // IDOR fix: a restore result is owned by the identity that created it, and only that
+  // identity can unlock it. A fresh identity has 0 credits and 0 free-used, so this takes
+  // the free-preview path and gets a resultId back.
+  const restoreReq = new Request('http://localhost/api/restore', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: 'reviva_id=owner-abc' },
+    body: JSON.stringify({ image: TINY_PNG, steps: { upscale: true } }),
+  });
+  const restoreRes = await restorePOST(restoreReq);
+  const restoreJson = await restoreRes.json();
+  const resultId = restoreJson.resultId;
+  assert(typeof resultId === 'string' && resultId.length > 0, 'restore preview response should include a resultId');
+
+  const ownerUnlockReq = new Request('http://localhost/api/unlock', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: 'reviva_id=owner-abc' },
+    body: JSON.stringify({ resultId, email: 'owner@example.com' }),
+  });
+  const ownerRes = await unlockPOST(ownerUnlockReq);
+  const ownerJson = await ownerRes.json();
+  assert(ownerRes.status === 200, 'the owner of a resultId should be able to unlock it');
+  assert('image' in ownerJson, 'a successful owner unlock should return an image field');
+
+  const attackerUnlockReq = new Request('http://localhost/api/unlock', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: 'reviva_id=attacker-xyz' },
+    body: JSON.stringify({ resultId, email: 'attacker@example.com' }),
+  });
+  const attackerRes = await unlockPOST(attackerUnlockReq);
+  const attackerJson = await attackerRes.json();
+  assert(attackerRes.status === 403, 'a non-owner unlocking someone else\'s resultId should be rejected with 403');
+  assert(!('image' in attackerJson), 'a non-owner should never receive the image, existing or not');
+
+  // imagestore: keys must be unguessable and non-sequential, not enumerable Date.now()/seq values
+  const imageStore = getImageStore();
+  const imgKey1 = await imageStore.put(TINY_PNG, 'image/png');
+  const imgKey2 = await imageStore.put(TINY_PNG, 'image/png');
+  assert(imgKey1 !== imgKey2, 'two put() calls should yield distinct, unguessable keys');
+  assert(!/-\d+$/.test(imgKey1), 'image key should be non-sequential, not a numeric-suffix counter');
+  assert(!/-\d+$/.test(imgKey2), 'image key should be non-sequential, not a numeric-suffix counter');
+  const UUID_KEY_RE = /^mem:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  assert(UUID_KEY_RE.test(imgKey1), 'image key should look like an unguessable UUID key');
+  assert(UUID_KEY_RE.test(imgKey2), 'image key should look like an unguessable UUID key');
 
   console.log('SMOKE-OK');
 }
