@@ -10,7 +10,7 @@ import {
   FREE_LIMIT,
 } from '@/lib/ratelimit';
 
-const MAX_BYTES = 10 * 1024 * 1024; // ~10MB
+const MAX_BYTES = 10 * 1024 * 1024;
 
 // Rough byte size of a data: URL's base64 payload.
 function dataUrlBytes(dataUrl: string): number {
