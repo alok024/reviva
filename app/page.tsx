@@ -60,9 +60,6 @@ interface Plan {
   credits: number;
 }
 
-// Static pricing mirror for the landing cards (server is the source of truth at checkout).
-// Amount/currency/label/credits must stay byte-for-byte in sync with lib/checkout.ts PLANS -
-// createCheckoutOrder charges plan.amount, so any drift here quotes a price the server won't honor.
 const PLANS: Plan[] = [
   {
     id: 'single',
@@ -82,7 +79,6 @@ const PLANS: Plan[] = [
   },
 ];
 
-// Self-contained before/after showcase drawn as inline SVG (no external assets, no real photo).
 const BEFORE_SVG =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -99,7 +95,7 @@ function priceLabel(amount: number, currency: string) {
 }
 
 const JOB_POLL_MS = 1200;
-const JOB_POLL_MAX_ATTEMPTS = 150; // ~3 minutes
+const JOB_POLL_MAX_ATTEMPTS = 150;
 
 async function pollRestoreJob(jobId: string): Promise<RestoreJobStatus> {
   for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
@@ -137,8 +133,6 @@ export default function Home() {
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Credits/free-preview balance is server state, never a client guess - this is the only
-  // place the number on screen comes from.
   const refreshEntitlement = useCallback(async () => {
     try {
       const res = await fetch('/api/entitlement');
@@ -147,7 +141,6 @@ export default function Home() {
         setEntitlement({ credits: data.credits, freeUsed: data.freeUsed ?? 0, freeLimit: data.freeLimit ?? 0 });
       }
     } catch {
-      // Display-only lookup - a failed refresh just leaves the last known balance on screen.
     }
   }, []);
 
@@ -229,13 +222,13 @@ export default function Home() {
         setAfter(job.result.after);
         setResultSteps(job.result.steps);
         setIsMock(job.result.mock);
-        setLocked(false); // paid restore - already unlocked, nothing left to gate
+        setLocked(false);
       } else if (data.mode === 'preview' && data.preview && data.resultId && data.steps) {
         setAfter(data.preview);
         setResultSteps(data.steps);
         setIsMock(!!data.mock);
         setResultId(data.resultId);
-        setLocked(true); // free preview - watermarked until an email/WhatsApp unlock
+        setLocked(true);
       } else {
         throw new Error('Unexpected response from the restore service');
       }
@@ -322,12 +315,10 @@ export default function Home() {
       };
 
       if (resp.mock_payment) {
-        // Local test mode: complete without opening a real modal, no charge.
         await finish(resp.mock_payment.payment_id, resp.mock_payment.signature);
         return;
       }
 
-      // Real keys present: open the Razorpay checkout modal.
       await loadRazorpayScript();
       const rzp = new window.Razorpay!({
         key: resp.key,

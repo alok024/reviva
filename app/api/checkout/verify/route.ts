@@ -1,7 +1,6 @@
 import { finalizePurchase } from '@/lib/checkout';
 import { getStore } from '@/lib/store';
 
-// Best-effort caller identity: prefer an identity cookie, fall back to IP.
 function identityHint(req: Request): { cookieId?: string; ip?: string } {
   const cookieHeader = req.headers.get('cookie') ?? '';
   const match = cookieHeader.match(/(?:^|;\s*)rv_uid=([^;]+)/);

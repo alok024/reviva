@@ -1,7 +1,3 @@
-// Deterministic, dependency-free preview marking: wraps the source image in an
-// SVG overlay with a repeated "REVIVA PREVIEW" mark. No canvas/sharp/native
-// image decoding involved, so it works the same for a real photo or the
-// keyless mock's echoed data: URL.
 
 export const WATERMARK_TEXT = 'REVIVA PREVIEW';
 

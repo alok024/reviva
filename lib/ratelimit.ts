@@ -2,13 +2,12 @@ import crypto from 'crypto';
 import { getStore, type Identity } from '@/lib/store';
 
 const IDENTITY_COOKIE = 'reviva_id';
-const IDENTITY_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year, so free/credit state survives return visits
+const IDENTITY_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
 const RESTORE_RATE_LIMIT = 12;
 const RESTORE_RATE_WINDOW_MS = 60_000;
 
 // Global (not per-identity) circuit breaker, bounding worst-case model spend
-// for the whole app in a day regardless of how it's distributed across callers.
 const DAILY_SPEND_CAP = 200;
 
 export const FREE_LIMIT = 2;
@@ -26,11 +25,6 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-// Trust boundary: X-Forwarded-For/X-Real-IP are set by the client and are only meaningful
-// behind a trusted proxy that overwrites them itself. Reviva has no such proxy, so this value
-// must never drive identity, the free-tier key, or the rate-limit key -- an attacker can send
-// a fresh value on every request to mint unlimited identities and dodge FREE_LIMIT and
-// checkRestoreRateLimit. Kept only as a best-effort secondary signal (e.g. future logging).
 function clientIp(req: Request): string | undefined {
   const forwarded = req.headers.get('x-forwarded-for');
   if (forwarded) return forwarded.split(',')[0].trim();
@@ -38,8 +32,6 @@ function clientIp(req: Request): string | undefined {
 }
 
 export function resolveIdentityFromRequest(req: Request): { identity: Identity; cookieHeader: string } {
-  // Identity is anchored solely on the reviva_id cookie token: mint it once with a CSPRNG,
-  // then keep resolving the same token every request so it round-trips to a stable identity.
   const token = readCookie(req, IDENTITY_COOKIE) || crypto.randomUUID();
   const identity = getStore().resolveIdentity({ cookieId: token });
   const cookieHeader =

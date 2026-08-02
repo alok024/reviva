@@ -20,9 +20,6 @@ export interface RestoreResult {
   mock: boolean;
 }
 
-// Real Replicate models, pinned via env — never hardcode a version hash, we don't have any.
-// Each input key is per-model (from its own Replicate schema), not one shared guess: gfpgan
-// takes "img"; real-esrgan and ddcolor take "image".
 const MODELS = {
   face: {
     label: 'Face restore',
@@ -50,11 +47,9 @@ const MODELS = {
 type StepKey = keyof typeof MODELS;
 const STEP_ORDER: StepKey[] = ['face', 'upscale', 'colorize'];
 
-// Splits a "data:<type>;base64,<payload>" URL into raw bytes + content type. The API route
-// already validates this shape before it reaches here.
 function parseDataUrl(dataUrl: string): { bytes: Buffer; contentType: string } {
   const comma = dataUrl.indexOf(',');
-  const header = dataUrl.slice(5, comma); // strip the leading "data:"
+  const header = dataUrl.slice(5, comma);
   const contentType = header.split(';')[0] || 'application/octet-stream';
   return { bytes: Buffer.from(dataUrl.slice(comma + 1), 'base64'), contentType };
 }
@@ -69,7 +64,6 @@ export async function restorePhoto({
   const enabled = STEP_ORDER.filter((k) => steps?.[k]);
 
   if (REPLICATE_MOCK) {
-    // Echo the original back as the "after" so the before/after UI shows something real.
     return {
       after: image,
       steps: enabled.map((k) => ({ name: MODELS[k].label, status: 'done', note: 'mock' })),
@@ -77,8 +71,6 @@ export async function restorePhoto({
     };
   }
 
-  // Real mode: sanitize the upload once before it ever leaves this server, then chain steps
-  // through the image store so only small URLs — never multi-MB base64 — move between calls.
   const store = getImageStore();
   const source = parseDataUrl(image);
   const safeBytes = sanitizeImage(source.bytes, source.contentType);
@@ -95,7 +87,6 @@ export async function restorePhoto({
     const outputUrl = out[0];
     if (!outputUrl) throw new Error(`${spec.label}: Replicate returned no output`);
 
-    // Replicate's own output URL expires in ~1h — pull it in and re-store it durably.
     const fetched = await fetch(outputUrl);
     if (!fetched.ok) throw new Error(`${spec.label}: failed to fetch model output (${fetched.status})`);
     const contentType = fetched.headers.get('content-type') || 'image/png';
@@ -110,7 +101,5 @@ export async function restorePhoto({
   return { after: currentUrl, steps: results, mock: false };
 }
 
-// lib/jobs.ts owns the job table and background scheduling; re-exported here so callers only
-// ever need to import from '@/lib/restore'.
 export { startRestoreJob, getRestoreJob } from './jobs';
 export type { RestoreJob } from './jobs';

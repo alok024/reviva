@@ -12,7 +12,6 @@ import {
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
-// Rough byte size of a data: URL's base64 payload.
 function dataUrlBytes(dataUrl: string): number {
   const comma = dataUrl.indexOf(',');
   const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : '';
@@ -25,11 +24,8 @@ function guessContentType(dataUrl: string): string {
 }
 
 const SETTLE_POLL_MS = 1000;
-const SETTLE_MAX_ATTEMPTS = 300; // ~5 minutes, well past any real restore chain
+const SETTLE_MAX_ATTEMPTS = 300;
 
-// Not awaited by the handler: startRestoreJob must not hold the request open.
-// Watching for success here (rather than only on the client's next poll) is
-// what keeps "consume only after success" true even if polling stops early.
 async function settleCreditOnSuccess(jobId: string, identityId: string) {
   try {
     for (let i = 0; i < SETTLE_MAX_ATTEMPTS; i++) {

@@ -1,12 +1,3 @@
-// Stubbed durable-store drop-in (Supabase/Upstash). NOT the local-dev default — getStore() in
-// ./index always returns the in-memory store; nothing here is imported by that path. This file
-// exists so a real backend can be wired later without touching the frozen Store contract.
-//
-// TODO: implement against Supabase (Postgres, for the ledger/orders/leads tables) and/or
-// Upstash (Redis, for hitRateLimit/addSpend). Every method below is unimplemented and fails
-// loudly instead of silently behaving like the in-memory store. Env is read lazily inside each
-// call, never at import time, so importing this module is always safe with zero config and no
-// SDK is imported here — add @supabase/supabase-js / @upstash/redis only when actually wiring it.
 
 import type { Store, Identity, PurchaseRecord } from './index';
 
@@ -81,8 +72,6 @@ class SupabaseStore implements Store {
   }
 }
 
-// Never called by getStore(). A future chunk wires this in explicitly once Supabase/Upstash
-// credentials and client code exist; constructing it is cheap and side-effect-free.
 export function createSupabaseStore(): Store {
   return new SupabaseStore();
 }

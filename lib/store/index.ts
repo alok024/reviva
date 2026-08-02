@@ -1,11 +1,3 @@
-// Process-wide store contract for Reviva. Backs identity resolution, a credit ledger, a
-// server-side free-tier counter, pending-order intent (so payment verify reconstructs what
-// was bought instead of trusting a client-supplied amount), single-use purchase records, a
-// windowed rate limiter, a daily spend circuit-breaker counter, and lead capture.
-//
-// getStore() returns a zero-dependency in-memory singleton — the only default this app ships
-// with, so local dev/CI never need a real datastore. A durable backend is a separate opt-in
-// adapter; see ./supabase-adapter (never wired in here).
 
 import crypto from 'crypto';
 
@@ -52,9 +44,6 @@ interface Lead {
   createdAt: number;
 }
 
-// Zero-dependency in-memory Store. State lives only for the process lifetime, which is fine
-// for mock mode, tests, and single-instance deploys; swap in a real adapter to survive restarts
-// or run more than one instance.
 class MemoryStore implements Store {
   private credits = new Map<string, number>();
   private freeUsed = new Map<string, number>();
@@ -67,7 +56,6 @@ class MemoryStore implements Store {
   private spendTotal = 0;
 
   resolveIdentity(hint: { cookieId?: string; ip?: string }): Identity {
-    // Hash so the same cookie/IP always resolves to the same bucket without storing raw PII.
     const raw = hint.cookieId || hint.ip || 'anon';
     return { id: 'id_' + crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24) };
   }
@@ -108,7 +96,6 @@ class MemoryStore implements Store {
   }
 
   recordPurchase(p: PurchaseRecord): boolean {
-    // Keyed by orderId+paymentId (not orderId alone) so a retried/replayed verify can't double-grant.
     const key = `${p.orderId}:${p.paymentId}`;
     if (this.purchases.has(key)) return false;
     this.purchases.add(key);
@@ -138,7 +125,6 @@ class MemoryStore implements Store {
     return this.spendTotal;
   }
 
-  // Spend resets on UTC date change — a plain day-key avoids a timer/cron for a single counter.
   private rolloverSpendDay(): void {
     const key = new Date().toISOString().slice(0, 10);
     if (key !== this.spendDay) {
@@ -152,7 +138,7 @@ class MemoryStore implements Store {
   }
 
   recordResultOwner(resultId: string, identityId: string): void {
-    if (this.resultOwners.has(resultId)) return; // first record wins; ownership is immutable once set
+    if (this.resultOwners.has(resultId)) return;
     this.resultOwners.set(resultId, identityId);
   }
 
@@ -163,7 +149,6 @@ class MemoryStore implements Store {
 
 let singleton: Store | null = null;
 
-// Process-wide in-memory default. Keyless: works with zero env and zero external services.
 export function getStore(): Store {
   if (!singleton) singleton = new MemoryStore();
   return singleton;

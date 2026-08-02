@@ -7,7 +7,6 @@ import { getImageStore } from '../lib/imagestore';
 import { POST as restorePOST } from '../app/api/restore/route';
 import { POST as unlockPOST } from '../app/api/unlock/route';
 
-// 1x1 PNG data URL used as the source photo.
 const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
@@ -15,7 +14,6 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error('ASSERT FAILED: ' + msg);
 }
 
-// startRestoreJob returns before the work finishes, so poll like a real client would.
 async function waitForJob(id: string, timeoutMs = 2000) {
   const start = Date.now();
   for (;;) {
@@ -40,7 +38,6 @@ async function main() {
   const ok = confirmPurchase(order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
   assert(ok === true, 'mock checkout should verify');
 
-  // plans: subscription is gone, only one-time per-project plans remain
   assert(!('unlimited_month' in PLANS), 'unlimited_month subscription plan should be removed');
   assert(Object.keys(PLANS).sort().join(',') === 'album,single', 'only single and album plans should remain');
   assert(
@@ -48,14 +45,12 @@ async function main() {
     'every remaining plan should be one-time INR'
   );
 
-  // createCheckoutOrder must record server-side intent, not trust a client-supplied amount later
   const store = getStore();
   const pending = store.getPendingOrder(order.order_id);
   assert(pending !== null, 'createCheckoutOrder should record a pending order');
   assert(pending!.planId === 'single', 'pending order should carry the requested plan id');
   assert(pending!.amount === PLANS.single.amount, 'pending order amount should match the plan amount');
 
-  // finalizePurchase grants credits once from the stored intent, replay is inert
   const buyer = store.resolveIdentity({ cookieId: 'smoke-finalize' });
   const creditsBefore = store.getCredits(buyer.id);
   const finalized = finalizePurchase(buyer.id, order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
@@ -66,7 +61,6 @@ async function main() {
   assert(replay.ok === false && replay.credited === 0, 'a replayed order/payment pair should not credit again');
   assert(store.getCredits(buyer.id) === creditsBefore + PLANS.single.credits, 'replay should not change the balance');
 
-  // store ledger: consumeCredit never goes negative
   const ledger = store.resolveIdentity({ cookieId: 'smoke-ledger' });
   assert(store.getCredits(ledger.id) === 0, 'a fresh identity should start with zero credits');
   assert(store.consumeCredit(ledger.id) === false, 'consumeCredit should fail when the balance is already zero');
@@ -77,7 +71,6 @@ async function main() {
   assert(store.consumeCredit(ledger.id) === false, 'consumeCredit should fail once credits are exhausted');
   assert(store.getCredits(ledger.id) === 0, 'balance should never go below zero');
 
-  // store: recordPurchase is single-use per (orderId, paymentId)
   const purchaseRecord: PurchaseRecord = {
     orderId: 'smoke-order-single-use',
     paymentId: 'smoke-payment-single-use',
@@ -89,7 +82,6 @@ async function main() {
   assert(store.recordPurchase(purchaseRecord) === true, 'recordPurchase should succeed the first time');
   assert(store.recordPurchase(purchaseRecord) === false, 'recordPurchase should reject a replayed order/payment pair');
 
-  // restore engine: async job + poll path resolves to the same shape as the sync mock
   const jobId = startRestoreJob({ image: TINY_PNG, steps: { upscale: true } });
   assert(typeof jobId === 'string' && jobId.length > 0, 'startRestoreJob should return a job id');
   const job = await waitForJob(jobId);
@@ -98,13 +90,9 @@ async function main() {
   assert(job.result!.mock === true, 'job result should be mock in keyless mode');
   assert(job.result!.after === TINY_PNG, 'job result should echo the original image in mock mode');
 
-  // razorpay: keyless mode is explicit mock, webhook verification is permissive only there
   assert(RAZORPAY_MOCK === true, 'RAZORPAY_MOCK should be true with no keys present');
   assert(verifyWebhookSignature('{}', 'not-a-real-signature') === true, 'webhook signature should verify in explicit keyless mock');
 
-  // IDOR fix: a restore result is owned by the identity that created it, and only that
-  // identity can unlock it. A fresh identity has 0 credits and 0 free-used, so this takes
-  // the free-preview path and gets a resultId back.
   const restoreReq = new Request('http://localhost/api/restore', {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie: 'reviva_id=owner-abc' },
@@ -135,7 +123,6 @@ async function main() {
   assert(attackerRes.status === 403, 'a non-owner unlocking someone else\'s resultId should be rejected with 403');
   assert(!('image' in attackerJson), 'a non-owner should never receive the image, existing or not');
 
-  // imagestore: keys must be unguessable and non-sequential, not enumerable Date.now()/seq values
   const imageStore = getImageStore();
   const imgKey1 = await imageStore.put(TINY_PNG, 'image/png');
   const imgKey2 = await imageStore.put(TINY_PNG, 'image/png');

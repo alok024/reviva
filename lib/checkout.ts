@@ -4,14 +4,13 @@ import { getStore } from './store';
 export type PlanKind = 'one-time';
 
 export interface Plan {
-  amount: number; // smallest currency unit (paise)
+  amount: number;
   currency: 'INR';
   label: string;
   kind: PlanKind;
   credits: number;
 }
 
-// Memorial & Legacy per-project pricing: pay once per photo or per album, not a subscription.
 export const PLANS: Record<'single' | 'album', Plan> = {
   single: {
     amount: 59900,
@@ -29,7 +28,6 @@ export const PLANS: Record<'single' | 'album', Plan> = {
   },
 };
 
-// Retired per-photo id from the old pricing; kept resolving so callers still on it don't break.
 const LEGACY_PLAN_IDS: Record<string, keyof typeof PLANS> = {
   pack20: 'single',
 };
@@ -50,11 +48,9 @@ export async function createCheckoutOrder(planId: string) {
   const plan = PLANS[resolvedId];
 
   const order = await createOrder(plan.amount, plan.currency, { planId: resolvedId });
-  // Server-side intent record so verify never has to trust a client-supplied amount.
   getStore().putPendingOrder(order.order_id, { planId: resolvedId, amount: plan.amount });
 
   if (order.mock) {
-    // Precompute the mock payment so the browser can complete without a real Razorpay modal.
     const paymentId = 'pay_mock_' + order.order_id.slice(-8);
     const signature = mockSignature(order.order_id, paymentId);
     return {
