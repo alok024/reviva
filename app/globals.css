@@ -1,5 +1,3 @@
-/* Shared design system — no build tooling, re-theme per product via --accent.
-   Clean, modern, light/dark aware. Copied into each product and lightly themed. */
 
 :root {
   --accent: #e11d48;

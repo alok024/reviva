@@ -7,7 +7,6 @@ const IDENTITY_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 const RESTORE_RATE_LIMIT = 12;
 const RESTORE_RATE_WINDOW_MS = 60_000;
 
-// Global (not per-identity) circuit breaker, bounding worst-case model spend
 const DAILY_SPEND_CAP = 200;
 
 export const FREE_LIMIT = 2;

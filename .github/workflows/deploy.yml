@@ -1,7 +1,5 @@
 name: Deploy
 
-# Production deploy is GATED on tests: the deploy job only runs after CI (build + smoke)
-# passes. If CI fails, deploy is skipped and production keeps the last good version.
 on:
   push:
     branches: [main]

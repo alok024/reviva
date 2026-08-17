@@ -9,8 +9,6 @@ updates:
       safe-updates:
         update-types: ["minor", "patch"]
     ignore:
-      # Framework versions are pinned on purpose (React 18 / Node 22 / TS 5.6).
-      # Only take minor/patch; major bumps are reviewed by hand, not auto-PR'd.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
