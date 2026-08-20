@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     return Response.json({ error: 'order_id, payment_id, signature are required' }, { status: 400 });
   }
 
-  const { identity, cookieHeader } = resolveIdentityFromRequest(req);
-  const { ok, credited } = finalizePurchase(identity.id, order_id, payment_id, signature);
+  const { cookieHeader } = resolveIdentityFromRequest(req);
+  const { ok, credited } = finalizePurchase(order_id, payment_id, signature);
   return Response.json({ ok, credited }, { headers: { 'Set-Cookie': cookieHeader } });
 }

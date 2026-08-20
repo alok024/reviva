@@ -14,6 +14,12 @@ export interface PurchaseRecord {
   createdAt: number;
 }
 
+export interface PendingOrderIntent {
+  planId: string;
+  amount: number;
+  identityId: string;
+}
+
 export interface Store {
   resolveIdentity(hint: { cookieId?: string; ip?: string }): Identity;
   getCredits(identityId: string): number;
@@ -21,8 +27,8 @@ export interface Store {
   consumeCredit(identityId: string): boolean;
   getFreeUsed(identityId: string): number;
   incFreeUsed(identityId: string): number;
-  putPendingOrder(orderId: string, intent: { planId: string; amount: number }): void;
-  getPendingOrder(orderId: string): { planId: string; amount: number } | null;
+  putPendingOrder(orderId: string, intent: PendingOrderIntent): void;
+  getPendingOrder(orderId: string): PendingOrderIntent | null;
   recordPurchase(p: PurchaseRecord): boolean;
   hitRateLimit(key: string, limit: number, windowMs: number): boolean;
   addSpend(units: number): number;
@@ -47,7 +53,7 @@ interface Lead {
 class MemoryStore implements Store {
   private credits = new Map<string, number>();
   private freeUsed = new Map<string, number>();
-  private pendingOrders = new Map<string, { planId: string; amount: number }>();
+  private pendingOrders = new Map<string, PendingOrderIntent>();
   private purchases = new Set<string>();
   private rateBuckets = new Map<string, RateBucket>();
   private leads: Lead[] = [];
@@ -87,11 +93,11 @@ class MemoryStore implements Store {
     return next;
   }
 
-  putPendingOrder(orderId: string, intent: { planId: string; amount: number }): void {
+  putPendingOrder(orderId: string, intent: PendingOrderIntent): void {
     this.pendingOrders.set(orderId, intent);
   }
 
-  getPendingOrder(orderId: string): { planId: string; amount: number } | null {
+  getPendingOrder(orderId: string): PendingOrderIntent | null {
     return this.pendingOrders.get(orderId) ?? null;
   }
 

@@ -620,8 +620,8 @@ export default function Home() {
               restorations, or a whole album at once? Pay once - there is no subscription.
             </p>
             <p className="muted" style={{ margin: '0 auto 32px', fontSize: '0.85rem' }}>
-              Prices below are for customers in India. Outside India, checkout is handled by our
-              Merchant of Record and billed in your local currency.
+              Prices are in Indian Rupees, charged via Razorpay. Checkout currently supports
+              India only.
             </p>
           </div>
           <div className="grid cols-2">

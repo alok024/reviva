@@ -6,6 +6,7 @@ import { RAZORPAY_MOCK, verifyWebhookSignature } from '../lib/razorpay';
 import { getImageStore } from '../lib/imagestore';
 import { POST as restorePOST } from '../app/api/restore/route';
 import { POST as unlockPOST } from '../app/api/unlock/route';
+import { POST as webhookPOST } from '../app/api/checkout/webhook/route';
 
 const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -32,7 +33,9 @@ async function main() {
   assert(r.steps.every((s) => s.status === 'done'), 'every step should be done');
   assert(r.mock === true, 'mock should be true with no REPLICATE_API_TOKEN');
 
-  const order = await createCheckoutOrder('single');
+  const store = getStore();
+  const buyer = store.resolveIdentity({ cookieId: 'smoke-finalize' });
+  const order = await createCheckoutOrder('single', buyer.id);
   assert(order.mock === true, 'order should be mock with no Razorpay keys');
   assert('mock_payment' in order && order.mock_payment, 'mock order should include mock_payment');
   const ok = confirmPurchase(order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
@@ -45,21 +48,65 @@ async function main() {
     'every remaining plan should be one-time INR'
   );
 
-  const store = getStore();
   const pending = store.getPendingOrder(order.order_id);
   assert(pending !== null, 'createCheckoutOrder should record a pending order');
   assert(pending!.planId === 'single', 'pending order should carry the requested plan id');
   assert(pending!.amount === PLANS.single.amount, 'pending order amount should match the plan amount');
+  assert(pending!.identityId === buyer.id, 'pending order should carry the identity that created it');
 
-  const buyer = store.resolveIdentity({ cookieId: 'smoke-finalize' });
   const creditsBefore = store.getCredits(buyer.id);
-  const finalized = finalizePurchase(buyer.id, order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
+  const finalized = finalizePurchase(order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
   assert(finalized.ok === true, 'finalizePurchase should succeed for a fresh order/payment pair');
   assert(finalized.credited === PLANS.single.credits, 'finalizePurchase should credit the plan amount');
-  assert(store.getCredits(buyer.id) === creditsBefore + PLANS.single.credits, 'credits should land in the store');
-  const replay = finalizePurchase(buyer.id, order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
+  assert(store.getCredits(buyer.id) === creditsBefore + PLANS.single.credits, 'credits should land on the identity that created the order');
+  const replay = finalizePurchase(order.order_id, order.mock_payment!.payment_id, order.mock_payment!.signature);
   assert(replay.ok === false && replay.credited === 0, 'a replayed order/payment pair should not credit again');
   assert(store.getCredits(buyer.id) === creditsBefore + PLANS.single.credits, 'replay should not change the balance');
+
+  const webhookBuyer = store.resolveIdentity({ cookieId: 'smoke-webhook' });
+  const webhookOrder = await createCheckoutOrder('single', webhookBuyer.id);
+  const capturedEvent = (orderId: string, paymentId: string, amount: number) =>
+    JSON.stringify({
+      event: 'payment.captured',
+      payload: { payment: { entity: { id: paymentId, order_id: orderId, amount } } },
+    });
+  const postWebhook = (body: string) =>
+    webhookPOST(
+      new Request('http://localhost/api/checkout/webhook', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-razorpay-signature': 'mock-sig' },
+        body,
+      })
+    );
+
+  const webhookRes = await postWebhook(capturedEvent(webhookOrder.order_id, 'pay_webhook_test', PLANS.single.amount));
+  const webhookJson = await webhookRes.json();
+  assert(webhookJson.ok === true, 'webhook should credit a fresh payment.captured event');
+  assert(webhookJson.credited === PLANS.single.credits, 'webhook should credit the plan amount');
+  assert(
+    store.getCredits(webhookBuyer.id) === PLANS.single.credits,
+    'webhook credit should land on the identity that created the order, independent of any browser session'
+  );
+
+  const webhookReplayRes = await postWebhook(capturedEvent(webhookOrder.order_id, 'pay_webhook_test', PLANS.single.amount));
+  const webhookReplayJson = await webhookReplayRes.json();
+  assert(webhookReplayJson.ok === false && webhookReplayJson.credited === 0, 'a replayed webhook delivery should not credit twice');
+  assert(store.getCredits(webhookBuyer.id) === PLANS.single.credits, 'replayed webhook should not change the balance');
+
+  const skippedRes = await postWebhook(JSON.stringify({ event: 'payment.failed' }));
+  const skippedJson = await skippedRes.json();
+  assert(skippedRes.status === 200 && skippedJson.ok === true, 'a non-payment.captured event should be acknowledged, not treated as an error');
+  assert(skippedJson.skipped === 'payment.failed', 'a skipped event should report which event it was');
+
+  const malformedRes = await postWebhook(JSON.stringify({ event: 'payment.captured', payload: {} }));
+  assert(malformedRes.status === 400, 'a payment.captured event missing payment fields should be rejected');
+
+  const amountBuyer = store.resolveIdentity({ cookieId: 'smoke-webhook-amount' });
+  const amountOrder = await createCheckoutOrder('single', amountBuyer.id);
+  const badAmountRes = await postWebhook(capturedEvent(amountOrder.order_id, 'pay_bad_amount', 1));
+  const badAmountJson = await badAmountRes.json();
+  assert(badAmountJson.ok === false, 'a captured amount that does not match the order must not be credited');
+  assert(store.getCredits(amountBuyer.id) === 0, 'a mismatched-amount webhook must not grant credits');
 
   const ledger = store.resolveIdentity({ cookieId: 'smoke-ledger' });
   assert(store.getCredits(ledger.id) === 0, 'a fresh identity should start with zero credits');

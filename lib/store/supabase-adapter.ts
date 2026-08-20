@@ -1,5 +1,5 @@
 
-import type { Store, Identity, PurchaseRecord } from './index';
+import type { Store, Identity, PendingOrderIntent, PurchaseRecord } from './index';
 
 function notConfigured(method: string): never {
   const hasEnv = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -35,11 +35,11 @@ class SupabaseStore implements Store {
     return notConfigured('incFreeUsed');
   }
 
-  putPendingOrder(_orderId: string, _intent: { planId: string; amount: number }): void {
+  putPendingOrder(_orderId: string, _intent: PendingOrderIntent): void {
     notConfigured('putPendingOrder');
   }
 
-  getPendingOrder(_orderId: string): { planId: string; amount: number } | null {
+  getPendingOrder(_orderId: string): PendingOrderIntent | null {
     return notConfigured('getPendingOrder');
   }
 

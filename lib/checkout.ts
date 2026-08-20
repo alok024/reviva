@@ -42,13 +42,13 @@ export function listPlans(): Array<{ id: string } & Plan> {
   return Object.entries(PLANS).map(([id, p]) => ({ id, ...p }));
 }
 
-export async function createCheckoutOrder(planId: string) {
+export async function createCheckoutOrder(planId: string, identityId: string) {
   const resolvedId = resolvePlanId(planId);
   if (!resolvedId) throw new Error(`Unknown plan: ${planId}`);
   const plan = PLANS[resolvedId];
 
   const order = await createOrder(plan.amount, plan.currency, { planId: resolvedId });
-  getStore().putPendingOrder(order.order_id, { planId: resolvedId, amount: plan.amount });
+  getStore().putPendingOrder(order.order_id, { planId: resolvedId, amount: plan.amount, identityId });
 
   if (order.mock) {
     const paymentId = 'pay_mock_' + order.order_id.slice(-8);
@@ -68,14 +68,7 @@ export function confirmPurchase(order_id: string, payment_id: string, signature:
   return verifyPaymentSignature(order_id, payment_id, signature);
 }
 
-export function finalizePurchase(
-  identityId: string,
-  order_id: string,
-  payment_id: string,
-  signature: string
-): { ok: boolean; credited: number } {
-  if (!confirmPurchase(order_id, payment_id, signature)) return { ok: false, credited: 0 };
-
+function grantFromPendingOrder(order_id: string, payment_id: string): { ok: boolean; credited: number } {
   const store = getStore();
   const intent = store.getPendingOrder(order_id);
   if (!intent) return { ok: false, credited: 0 };
@@ -88,13 +81,32 @@ export function finalizePurchase(
     paymentId: payment_id,
     planId: intent.planId,
     amount: intent.amount,
-    identityId,
+    identityId: intent.identityId,
     createdAt: Date.now(),
   });
   if (!recorded) return { ok: false, credited: 0 };
 
-  store.grantCredits(identityId, plan.credits);
+  store.grantCredits(intent.identityId, plan.credits);
   return { ok: true, credited: plan.credits };
+}
+
+export function finalizePurchase(
+  order_id: string,
+  payment_id: string,
+  signature: string
+): { ok: boolean; credited: number } {
+  if (!confirmPurchase(order_id, payment_id, signature)) return { ok: false, credited: 0 };
+  return grantFromPendingOrder(order_id, payment_id);
+}
+
+export function finalizePurchaseFromWebhook(
+  order_id: string,
+  payment_id: string,
+  capturedAmount: number
+): { ok: boolean; credited: number } {
+  const intent = getStore().getPendingOrder(order_id);
+  if (!intent || intent.amount !== capturedAmount) return { ok: false, credited: 0 };
+  return grantFromPendingOrder(order_id, payment_id);
 }
 
 export { RAZORPAY_MOCK };
