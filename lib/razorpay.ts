@@ -43,6 +43,7 @@ function hexEqual(a: string, b: string): boolean {
 
 export function verifyPaymentSignature(orderId: string, paymentId: string, signature: string): boolean {
   if (RAZORPAY_MOCK) {
+    if (process.env.NODE_ENV === 'production') return false;
     return signature === mockSignature(orderId, paymentId);
   }
   const expected = crypto.createHmac('sha256', KEY_SECRET).update(`${orderId}|${paymentId}`).digest('hex');
@@ -50,7 +51,7 @@ export function verifyPaymentSignature(orderId: string, paymentId: string, signa
 }
 
 export function verifyWebhookSignature(rawBody: Buffer | string, signature: string): boolean {
-  if (RAZORPAY_MOCK) return true;
+  if (RAZORPAY_MOCK) return process.env.NODE_ENV !== 'production';
   if (!WEBHOOK_SECRET) return false;
   const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex');
   return hexEqual(expected, signature);
